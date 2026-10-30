@@ -1,0 +1,38 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease -PversionCode=${{ github.run_number }}
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="1.${{ github.run_number }}"
+          cp app/build/outputs/apk/release/app-release.apk "Inventory-$VERSION.apk"
+          gh release create "v$VERSION" "Inventory-$VERSION.apk" \
+            --title "Inventory $VERSION" \
+            --notes "Download **Inventory-$VERSION.apk** below on the tablet and open it to install or update. Your saved progress is kept when updating." \
+            --latest

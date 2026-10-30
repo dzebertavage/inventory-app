@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The CI build passes -PversionCode=<run number> so every release installs over the previous one.
+def vc = (project.findProperty('versionCode') ?: '1').toString().toInteger()
+
+android {
+    namespace 'com.inventory.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.inventory.app'
+        minSdk 26
+        targetSdk 35
+        versionCode vc
+        versionName "1.${vc}"
+    }
+
+    signingConfigs {
+        // A fixed key, committed with the project, so every build can update the
+        // installed app in place (keeping saved progress). Personal sideloaded app only.
+        release {
+            storeFile file('release.keystore')
+            storePassword 'inventory-app'
+            keyAlias 'inventory'
+            keyPassword 'inventory-app'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
