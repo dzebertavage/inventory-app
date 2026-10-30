@@ -91,6 +91,12 @@ public class MainActivity extends Activity {
     private ScrollView listScroll;
     private LinearLayout list;
     private TextView padItem, padField, padDisplay;
+    private TextView tabCount, tabCalc;
+    private View countKeys, calcKeys, calcHistory;
+    private ScrollView historyScroll;
+    private LinearLayout historyList;
+    private final com.inventory.app.calc.CalcEngine calc = new com.inventory.app.calc.CalcEngine();
+    private boolean calcMode, historyOpen;
     private final List<ItemViews> itemViews = new ArrayList<>();
 
     /** Digits typed for the selected field but not yet committed. */
@@ -114,6 +120,7 @@ public class MainActivity extends Activity {
         super.onCreate(saved);
         prefs = getSharedPreferences("settings", MODE_PRIVATE);
         state = new InventoryState(getFilesDir());
+        restoreCalc();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         root = new FrameLayout(this);
         root.setBackgroundColor(C_BG);
@@ -146,6 +153,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         if (state.book != null) { commitBuffer(); state.save(); }
+        saveCalc();
     }
 
     private void setupInsets() {
@@ -699,26 +707,66 @@ public class MainActivity extends Activity {
     private View buildKeypad() {
         LinearLayout pad = vbox();
         pad.setBackgroundColor(C_KEYPAD_BG);
-        pad.setPadding(dp(12), dp(10), dp(12), dp(12));
+        pad.setPadding(dp(12), dp(8), dp(12), dp(12));
         pad.setElevation(dp(12));
 
+        // ---- tabs: Count | Calculator
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setPadding(dp(4), dp(4), dp(4), dp(4));
+        tabs.setBackground(rounded(0xFFD5CFC4, dp(12), 0, 0));
+        tabCount = button("Count", 0, C_INK, 18);
+        tabCalc = button("Calculator", 0, C_INK, 18);
+        tabCount.setOnClickListener(v -> setCalcMode(false));
+        tabCalc.setOnClickListener(v -> setCalcMode(true));
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(0, dp(40), 1);
+        tl.rightMargin = dp(4);
+        tabs.addView(tabCount, tl);
+        tabs.addView(tabCalc, new LinearLayout.LayoutParams(0, dp(40), 1));
+        pad.addView(tabs);
+
+        // ---- current item + display (visible on both tabs)
         LinearLayout info = new LinearLayout(this);
         info.setGravity(Gravity.CENTER_VERTICAL);
+        info.setPadding(0, dp(8), 0, 0);
         LinearLayout infoText = vbox();
         padItem = text("", 17, C_INK, true);
         padItem.setSingleLine(true);
         padItem.setEllipsize(TextUtils.TruncateAt.END);
         padField = text("", 14, C_INK2, false);
+        padField.setSingleLine(true);
+        padField.setEllipsize(TextUtils.TruncateAt.END);
         infoText.addView(padItem);
         infoText.addView(padField);
         info.addView(infoText, new LinearLayout.LayoutParams(0, -2, 1));
         padDisplay = text("", 30, C_INK, true);
         padDisplay.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         padDisplay.setPadding(dp(16), 0, dp(16), 0);
+        padDisplay.setSingleLine(true);
+        padDisplay.setEllipsize(TextUtils.TruncateAt.START);
         padDisplay.setBackground(rounded(Color.WHITE, dp(10), dp(2), C_SELECT));
-        info.addView(padDisplay, new LinearLayout.LayoutParams(dp(190), dp(52)));
+        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(dp(190), dp(52));
+        dl.leftMargin = dp(10);
+        info.addView(padDisplay, dl);
         pad.addView(info);
 
+        // ---- the two key areas share one fixed height so the item list never jumps
+        FrameLayout keys = new FrameLayout(this);
+        countKeys = buildCountKeys();
+        calcKeys = buildCalcKeys();
+        calcHistory = buildCalcHistory();
+        keys.addView(countKeys, new FrameLayout.LayoutParams(-1, -1));
+        keys.addView(calcKeys, new FrameLayout.LayoutParams(-1, -1));
+        keys.addView(calcHistory, new FrameLayout.LayoutParams(-1, -1));
+        pad.addView(keys, new LinearLayout.LayoutParams(-1, dp(KEYS_HEIGHT)));
+
+        applyCalcMode();
+        return pad;
+    }
+
+    private static final int KEYS_HEIGHT = 5 * (44 + 6);   // five calculator rows; the four numpad rows (4 × 62) fit too
+
+    private View buildCountKeys() {
+        LinearLayout box = vbox();
         String[][] rows = {
                 {"7", "8", "9", "⌫"},
                 {"4", "5", "6", "BLANK"},
@@ -756,13 +804,230 @@ public class MainActivity extends Activity {
                         key = button(k, C_KEY, C_INK, 30);
                         key.setOnClickListener(v -> { haptic(v); typeKey(k); });
                 }
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(58), weight);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(54), weight);
                 if (c < r.length - 1) lp.rightMargin = dp(8);
                 row.addView(key, lp);
             }
-            pad.addView(row);
+            box.addView(row);
         }
-        return pad;
+        return box;
+    }
+
+    // =================================================================== calculator
+
+    private static final int C_OP = 0xFFD3E6DC;      // operator keys
+    private static final int C_FN = 0xFFE9DFC8;      // AC ( ) %
+
+    private View buildCalcKeys() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.HORIZONTAL);
+
+        String[][] rows = {
+                {"AC", "( )", "%", "÷"},
+                {"7", "8", "9", "×"},
+                {"4", "5", "6", "−"},
+                {"1", "2", "3", "+"},
+                {"0", ".", "="},
+        };
+        LinearLayout grid = vbox();
+        for (String[] r : rows) {
+            LinearLayout row = new LinearLayout(this);
+            row.setPadding(0, dp(6), 0, 0);
+            for (int c = 0; c < r.length; c++) {
+                String k = r[c];
+                TextView key;
+                switch (k) {
+                    case "AC": key = button(k, C_FN, C_INK, 20); break;
+                    case "( )": key = button(k, C_FN, C_INK, 20); break;
+                    case "%": key = button(k, C_FN, C_INK, 22); break;
+                    case "÷": case "×": case "−": case "+": key = button(k, C_OP, C_BRAND, 28); break;
+                    case "=": key = button(k, C_BRAND, Color.WHITE, 28); break;
+                    default: key = button(k, C_KEY, C_INK, 26);
+                }
+                key.setOnClickListener(v -> { haptic(v); calcKey(k); });
+                float weight = k.equals("=") ? 2.08f : 1;
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(44), weight);
+                if (c < r.length - 1) lp.rightMargin = dp(6);
+                row.addView(key, lp);
+            }
+            grid.addView(row);
+        }
+        LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(0, -1, 4);
+        gl.rightMargin = dp(6);
+        box.addView(grid, gl);
+
+        // right column: History, backspace, Use answer (tall)
+        LinearLayout side = vbox();
+        side.setPadding(0, dp(6), 0, 0);
+        TextView hist = button("History", 0xFFD5CFC4, C_INK, 15);
+        hist.setOnClickListener(v -> { haptic(v); showCalcHistory(true); });
+        side.addView(hist, new LinearLayout.LayoutParams(-1, dp(44)));
+        TextView back = button("⌫", 0xFFD5CFC4, C_INK, 26);
+        back.setOnClickListener(v -> { haptic(v); calcKey("⌫"); });
+        back.setOnLongClickListener(v -> { calcKey("AC"); return true; });
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-1, dp(44));
+        bl.topMargin = dp(6);
+        side.addView(back, bl);
+        TextView use = button("Use\nanswer", C_SELECT, C_INK, 18);
+        use.setOnClickListener(v -> { haptic(v); useAnswer(); });
+        LinearLayout.LayoutParams ul = new LinearLayout.LayoutParams(-1, 0, 1);
+        ul.topMargin = dp(6);
+        side.addView(use, ul);
+        box.addView(side, new LinearLayout.LayoutParams(0, -1, 1.15f));
+        return box;
+    }
+
+    private View buildCalcHistory() {
+        LinearLayout box = vbox();
+        box.setPadding(0, dp(6), 0, 0);
+        LinearLayout bar = new LinearLayout(this);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text("History", 17, C_INK, true);
+        bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView clear = button("Clear", 0xFFD5CFC4, C_INK, 15);
+        clear.setOnClickListener(v -> {
+            if (calc.history.isEmpty()) return;
+            new AlertDialog.Builder(this).setTitle("Clear calculator history?")
+                    .setPositiveButton("Clear", (d, w) -> { calc.history.clear(); saveCalc(); renderHistory(); })
+                    .setNegativeButton("Cancel", null).show();
+        });
+        bar.addView(clear, lp(dp(90), dp(40), dp(8)));
+        TextView keysBtn = button("Back to keys", C_BRAND, Color.WHITE, 15);
+        keysBtn.setOnClickListener(v -> showCalcHistory(false));
+        bar.addView(keysBtn, lp(-2, dp(40), 0));
+        box.addView(bar);
+
+        historyScroll = new ScrollView(this);
+        historyList = vbox();
+        historyScroll.addView(historyList);
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-1, 0, 1);
+        sl.topMargin = dp(6);
+        historyScroll.setBackground(rounded(Color.WHITE, dp(10), 0, 0));
+        historyScroll.setClipToOutline(true);
+        box.addView(historyScroll, sl);
+        return box;
+    }
+
+    private void renderHistory() {
+        historyList.removeAllViews();
+        if (calc.history.isEmpty()) {
+            TextView none = text("No calculations yet.", 16, C_MUTED, false);
+            none.setGravity(Gravity.CENTER);
+            none.setPadding(0, dp(40), 0, 0);
+            historyList.addView(none, new LinearLayout.LayoutParams(-1, -2));
+            return;
+        }
+        for (int i = 0; i < calc.history.size(); i++) {
+            com.inventory.app.calc.CalcEngine.Entry e = calc.history.get(i);
+            LinearLayout row = vbox();
+            row.setGravity(Gravity.END);
+            row.setPadding(dp(14), dp(8), dp(14), dp(8));
+            row.setBackground(ripple(rounded(i % 2 == 0 ? Color.WHITE : 0xFFF8F6F2, 0, 0, 0)));
+            TextView ex = text(e.expression, 15, C_INK2, false);
+            ex.setGravity(Gravity.END);
+            TextView res = text("= " + e.result, 22, C_INK, true);
+            res.setGravity(Gravity.END);
+            row.addView(ex, new LinearLayout.LayoutParams(-1, -2));
+            row.addView(res, new LinearLayout.LayoutParams(-1, -2));
+            final String result = e.result;
+            row.setOnClickListener(v -> {
+                calc.insertNumber(result);
+                saveCalc();
+                showCalcHistory(false);
+            });
+            historyList.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        }
+        TextView hint = text("Tap a result to use it in your calculation", 13, C_MUTED, false);
+        hint.setGravity(Gravity.CENTER);
+        hint.setPadding(0, dp(8), 0, dp(8));
+        historyList.addView(hint, new LinearLayout.LayoutParams(-1, -2));
+        main.post(() -> historyScroll.fullScroll(View.FOCUS_DOWN));
+    }
+
+    private void showCalcHistory(boolean show) {
+        historyOpen = show;
+        if (show) renderHistory();
+        applyCalcMode();
+    }
+
+    private void calcKey(String k) {
+        switch (k) {
+            case "AC": calc.clear(); break;
+            case "( )": calc.paren(); break;
+            case "%": calc.percent(); break;
+            case "⌫": calc.backspace(); break;
+            case "=": if (calc.equals()) saveCalc(); break;
+            case ".": calc.point(); break;
+            case "+": case "−": case "×": case "÷": calc.operator(k.charAt(0)); break;
+            default: calc.digit(k.charAt(0));
+        }
+        refreshKeypad();
+    }
+
+    /** Puts the (rounded) answer into the selected count field's display; Next still has to be pressed. */
+    private void useAnswer() {
+        String a = calc.answerForUse();
+        if (a == null) {
+            refreshKeypad();
+            toast("Nothing to use yet. Enter a calculation first.");
+            return;
+        }
+        saveCalc();
+        buffer = a;
+        setCalcMode(false);
+        refreshCard(state.item);
+        toast(a + " entered. Tap Next to save it.");
+    }
+
+    private void setCalcMode(boolean on) {
+        calcMode = on;
+        historyOpen = false;
+        prefs.edit().putBoolean("calcMode", on).apply();
+        applyCalcMode();
+    }
+
+    private void applyCalcMode() {
+        if (countKeys == null) return;
+        countKeys.setVisibility(calcMode ? View.GONE : View.VISIBLE);
+        calcKeys.setVisibility(calcMode && !historyOpen ? View.VISIBLE : View.GONE);
+        calcHistory.setVisibility(calcMode && historyOpen ? View.VISIBLE : View.GONE);
+        tabCount.setBackground(ripple(rounded(calcMode ? 0x00000000 : Color.WHITE, dp(9), 0, 0)));
+        tabCalc.setBackground(ripple(rounded(calcMode ? Color.WHITE : 0x00000000, dp(9), 0, 0)));
+        tabCount.setTextColor(calcMode ? C_INK2 : C_BRAND);
+        tabCalc.setTextColor(calcMode ? C_BRAND : C_INK2);
+        LinearLayout.LayoutParams dl = (LinearLayout.LayoutParams) padDisplay.getLayoutParams();
+        dl.width = dp(calcMode ? 300 : 190);
+        padDisplay.setLayoutParams(dl);
+        refreshKeypad();
+    }
+
+    private void saveCalc() {
+        try {
+            org.json.JSONArray h = new org.json.JSONArray();
+            for (com.inventory.app.calc.CalcEngine.Entry e : calc.history) {
+                h.put(new org.json.JSONArray().put(e.expression).put(e.result));
+            }
+            prefs.edit()
+                    .putString("calcExpr", calc.saveExpression())
+                    .putString("calcAnswer", calc.lastAnswer())
+                    .putBoolean("calcEvaluated", calc.saveJustEvaluated())
+                    .putString("calcHistory", h.toString())
+                    .apply();
+        } catch (Exception ignored) { }
+    }
+
+    private void restoreCalc() {
+        calc.restore(prefs.getString("calcExpr", ""), prefs.getString("calcAnswer", null),
+                prefs.getBoolean("calcEvaluated", false));
+        calc.history.clear();
+        try {
+            org.json.JSONArray h = new org.json.JSONArray(prefs.getString("calcHistory", "[]"));
+            for (int i = 0; i < h.length(); i++) {
+                org.json.JSONArray e = h.getJSONArray(i);
+                calc.history.add(new com.inventory.app.calc.CalcEngine.Entry(e.getString(0), e.getString(1)));
+            }
+        } catch (Exception ignored) { }
+        calcMode = prefs.getBoolean("calcMode", false);
     }
 
     private void refreshKeypad() {
@@ -771,6 +1036,14 @@ public class MainActivity extends Activity {
         XlsxBook.Field f = state.currentField();
         padItem.setText(it.description);
         padField.setText(f.label + (it.vendor != null ? "  ·  " + it.vendor.replace('\n', ' ') : ""));
+        if (calcMode) {
+            String d = calc.display();
+            padDisplay.setText(d.isEmpty() ? "0" : d);
+            padDisplay.setTextColor(d.isEmpty() ? 0xFFA9A299 : (calc.showingResult() ? C_BRAND : C_INK));
+            padDisplay.setTextSize(TypedValue.COMPLEX_UNIT_SP, d.length() > 16 ? 20 : d.length() > 11 ? 24 : 30);
+            return;
+        }
+        padDisplay.setTextSize(TypedValue.COMPLEX_UNIT_SP, buffer.length() > 9 ? 24 : 30);
         if (!buffer.isEmpty()) {
             padDisplay.setText(buffer);
             padDisplay.setTextColor(C_INK);

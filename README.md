@@ -6,6 +6,9 @@ A portrait-mode Android tablet app for filling out the monthly warehouse invento
 - Each tab gets one large card per item: **Item Description** first, **Vendor** second, then Unit, Par and Item ID.
 - An on-screen number pad (with decimal point) fills in **Qty on Hand**, **5 lb Bags**, **Lbs on Mail Order Shelf** and **Lbs in Buckets**. **Blank** leaves a cell empty, which is different from 0.
 - Values already in the sheet are shown and can be overwritten. Long-press a field to undo an entry.
+- The keypad area has two tabs: **Count** (the number pad) and **Calculator**. The calculator has the basic Pixel-style keys (AC, ( ), %, ÷ × − +, ⌫, =) and a scrollable **History**; tap a past result to reuse it.
+  **Use answer** rounds the result to 2 decimals and drops it into the selected field's display on the Count tab. It is saved only when you press **Next**.
+  The calculation and history are kept when you switch tabs or close the app; AC clears the current calculation.
 - **Qty on Hand** turns red with "AT / BELOW PAR" when it is at or below Par.
 - Progress saves after every entry.
 - **Export** warns about anything not yet counted or marked Blank. It then writes
